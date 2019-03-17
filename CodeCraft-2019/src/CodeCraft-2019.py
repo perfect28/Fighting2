@@ -16,7 +16,8 @@ class Node:
 
     def __init__(self, node_id):
         self.id = node_id
-        self.edgeList = []  # 邻接道路列表（边信息，用边，因为边含节点）
+        self.edgeList1 = []  # 邻接道路列表（边信息，用边，因为边含节点）
+        self.edgeList2 = []  # 邻接道路列表（边信息，用边，因为边含节点）
         self.vis = False
         self.dis = 0x3f3f3f3f
 
@@ -42,7 +43,7 @@ class Edge:
         self.limit_rate = limit_rate
         self.num_lane = num_lane
         self.is_bidirection = is_bidirection
-        self.status = np.zeros((road_len, num_lane))
+        self.status = np.zeros((road_len, num_lane), dtype=int)
         self.car_num = 0  # 此时停在这条道路上的车的数量
         # x,y表示调度到哪辆车了
         self.x = 0  # 对应道路长度坐标
@@ -61,8 +62,10 @@ class Car:
         self.end_time = 100
         self.status = 0  # 车的状态，0表示等待状态，1表示终止状态
         self.path = []  # 车的导航路径，即最终结果
-        self.path_id = 0  # 车当前即将开往的道路对应的path id
-        self.dir = 'D'  # 下一个路口的转弯方向, 'D'|'L'|'R'
+        self.cur_point = start_point  # 下一个路口（即将到达)的id号
+        self.cur_edge = -1  # 当前所在道路id
+        self.cur_lane = -1  # 当前所在车道id
+        self.cur_dir = ''  # 下一个路口的转弯方向, 'D'|'L'|'R'
         # print("car(start->end): " + str(car_id) + ' ' + str(start_point) + ' ' + str(end_point))
 
 
@@ -75,11 +78,14 @@ class CarScheduler:
         self.current_time = 0  # 当前时间片
         self.max_time = 100  # 最大时间片设置为100
 
-        self.sum_carnum = 0
-        self.scheduled_carnum = 0
+        self.sum_carnum = 0  # 当前需要调度的车辆数
+        self.scheduled_carnum = 0  # 当前已调度的车辆数
+        self.last_scheduled_carnum = -1  # 上一轮已调度的车辆数，用来检查死锁
+        self.schedule_carList = []
+        self.finished_carnum = 0  # 已经到达终点的车辆数
 
     def initFile(self, car_path, road_path, cross_path):
-        with open(road_path, 'r') as file:
+        with open(road_path, 'r', encoding='UTF-8') as file:
             lines = file.read().split('\n')  # store the lines in a list
             lines = [x for x in lines if len(x) > 0]  # get read of the empty lines
             lines = [x for x in lines if x[0] != '#']  # get rid of comments
@@ -89,10 +95,10 @@ class CarScheduler:
                 road_id, road_len, limit_rate, num_lane, u, v, is_bidirection = data
                 self.roadList[road_id] = Edge(road_id, u, v, road_len, limit_rate, num_lane, is_bidirection)
                 if is_bidirection == 1:  # 如果是双向道
-                    self.roadList[road_id + 100000] = Edge(road_id + 100000, v, u, road_len, limit_rate, num_lane,
-                                                           is_bidirection)
+                    self.roadList[road_id + 100000] = \
+                        Edge(road_id + 100000, v, u, road_len, limit_rate, num_lane, is_bidirection)
 
-        with open(cross_path, 'r') as file:
+        with open(cross_path, 'r', encoding='UTF-8') as file:
             lines = file.read().split('\n')  # store the lines in a list
             lines = [x for x in lines if len(x) > 0]  # get read of the empty lines
             lines = [x for x in lines if x[0] != '#']  # get rid of comments
@@ -104,24 +110,31 @@ class CarScheduler:
                 # 路口的道路信息：同一条道路，若为双向，则添加(入，出）
                 # 例如,路口为u，道路为uv,则添加(vu方向id，uv方向id)
                 # 如果单向，则添加(uv,-1)或者(-1,uv)
-                edgeList = self.crossList[cross_id].edgeList
+                edgeList1 = self.crossList[cross_id].edgeList1  # 入口边
+                edgeList2 = self.crossList[cross_id].edgeList2  # 出口边
                 for id in data[1:]:
                     if id == -1:
-                        edgeList.append((id, id))
+                        edgeList1.append(id)
+                        edgeList2.append(id)
                         continue
 
                     road = self.roadList[id]
                     if road.is_bidirection:
                         id2 = id + 100000
+                    else:
+                        id2 = -1
+
                     if road.v == cross_id:  # 此路口为该边出口
-                        edgeList.append((id, id2))
+                        edgeList1.append(id)
+                        edgeList2.append(id2)
                     elif road.u == cross_id:  # 此路口为该边入口
-                        edgeList.append((id2, id))
+                        edgeList1.append(id2)
+                        edgeList2.append(id)
 
                 # print("cross(出口边，入口边): " + str(cross_id) + ' ' + str(self.crossList[cross_id].edgeList))
 
         # 最后读取car的信息
-        with open(car_path, 'r') as file:
+        with open(car_path, 'r', encoding='UTF-8') as file:
             lines = file.read().split('\n')  # store the lines in a list
             lines = [x for x in lines if len(x) > 0]  # get read of the empty lines
             lines = [x for x in lines if x[0] != '#']  # get rid of comments
@@ -132,6 +145,8 @@ class CarScheduler:
                 self.carList[car_id] = Car(car_id, start_point, end_point, speed, start_time)
 
     def calculateshortestpath(self, startNode, endNode):
+        if startNode.id == endNode.id:  # 直接返回！！
+            return 0
         q = []
         for node in self.crossList.values():
             node.dis = 0x3f3f3f3f
@@ -143,9 +158,9 @@ class CarScheduler:
 
         while q:
             tmp = heapq.heappop(q)  # 获得此时的cross,即节点信息
-            for _, edge_id in tmp.edgeList:  # 遍历邻接道路,后者表示从此路口出去的边id
-                if edge_id == -1: continue
-                edge = self.roadList[edge_id]
+            for road_id in tmp.edgeList2:  # 遍历邻接道路,后者表示从此路口出去的边id
+                if road_id == -1: continue
+                edge = self.roadList[road_id]
                 u = edge.u  # ｕ应该和上边的tmp的id一致
                 v = edge.v
                 if self.crossList[v].vis: continue
@@ -173,24 +188,30 @@ class CarScheduler:
                 min_len = 0x3f3f3f3f
 
                 # 遍历该出发点的每一个出口，粗略估计每条路的行驶代价
-                for _, id in self.crossList[car.start_point].edgeList:
-                    if id == -1: continue
-                    startNode = self.crossList[self.roadList[id].v]
+                for edge_id in self.crossList[car.start_point].edgeList2:
+                    if edge_id == -1: continue
+                    edge = self.roadList[edge_id]
+
+                    startNode = self.crossList[edge.v]
                     endNode = self.crossList[car.end_point]
                     dis = self.calculateshortestpath(startNode, endNode)
 
-                    edge = self.roadList[id]
                     edge_weight = math.ceil(edge.road_len * 1.0 / edge.limit_rate)  # 边的权重为长度除以限速，粗略估计
                     status_weight = math.ceil(edge.car_num * 1.0 / edge.num_lane)  # 路况权重为车的数量除以车道数
-                    dis += edge_weight + status_weight
+                    dis += edge_weight + 3 * status_weight
 
                     if dis < min_len:
                         min_len = dis
-                        road_id = id
+                        road_id = edge_id
 
                 cur_road = self.roadList[road_id]
                 num_lane = cur_road.num_lane
                 road_len = cur_road.road_len
+
+                # if cur_road.car_num > num_lane * road_len / 20:
+                #     car.start_time += 1
+                #     continue
+
                 status = cur_road.status
                 for i in range(num_lane):  # 遍历车道
                     if status[road_len - 1, i] == 0:
@@ -202,7 +223,15 @@ class CarScheduler:
                         status[j, i] = car.id  # 调度车辆
                         cur_road.car_num += 1  # 该道路车辆＋1
                         self.sum_carnum += 1  # 调度总车辆+1
+                        self.schedule_carList.append(car.id)
+                        car.cur_lane = i
+                        car.cur_edge = cur_road.road_id
+                        car.cur_point = cur_road.v
+                        car.path.append(cur_road.road_id)
                         break
+
+                if car.cur_edge == -1:  # 表示此次没有出库，出发时间后移1
+                    car.start_time += 1
 
     '''
     调度某一车道车辆到终止位置
@@ -217,50 +246,263 @@ class CarScheduler:
                 car = self.carList[status[i, channel_id]]
                 if car.status == 0:  # 状态为等待行驶
                     s = min(car.speed, cur_road.limit_rate)
-                    if s > i - tmp_pos:  # 可行驶距离超过剩余到路口的距离
+                    if s > i:  # 可行驶距离超过剩余到路口的距离!!(一定是路口，其他则是能走多少多少）
                         break  # 剩下的车都不改变状态
                     else:
-                        status[i - s, channel_id] = status[i, channel_id]
+                        if s > i - tmp_pos:
+                            status[tmp_pos + 1, channel_id] = status[i, channel_id]  # 紧贴上一辆车后面！！
+                        else:
+                            status[i - s, channel_id] = status[i, channel_id]
                         status[i, channel_id] = 0
+                        car.status = 1  # 车状态变为终止
+                        self.scheduled_carnum += 1
                         tmp_pos = i - s
                 else:  # 状态为终止状态
                     continue
+
+    def get_direction(self, car):
+        if car.cur_edge == -1:
+            car.cur_dir = 'D'
+            return
+
+        min_len = 0x3f3f3f3f
+
+        # 遍历该出发点的每一个出口，粗略估计每条路的行驶代价
+        for edge_id in self.crossList[car.cur_point].edgeList2:
+            if edge_id == -1: continue
+            if math.fabs(edge_id - car.cur_edge) == 100000: continue  # 去掉来时的方向
+            edge = self.roadList[edge_id]
+
+            startNode = self.crossList[edge.v]
+            endNode = self.crossList[car.end_point]
+            dis = self.calculateshortestpath(startNode, endNode)
+
+            edge_weight = math.ceil(edge.road_len * 1.0 / edge.limit_rate)  # 边的权重为长度除以限速，粗略估计
+            status_weight = math.ceil(edge.car_num * 1.0 / edge.num_lane)  # 路况权重为车的数量除以车道数
+            dis += edge_weight + 3 * status_weight
+
+            if dis < min_len:
+                min_len = dis
+                road_id = edge_id
+
+        # 根据下条路的road_id和此时的cur_edge求得转弯方向
+        idx1 = self.crossList[car.cur_point].edgeList1.index(car.cur_edge)  # cur_edge是入边方向
+        idx2 = self.crossList[car.cur_point].edgeList2.index(road_id)  # road_id是出边方向
+        tmp = (idx2 + 4 - idx1) % 4
+        if tmp == 1:
+            car.cur_dir = 'L'
+        elif tmp == 2:
+            car.cur_dir = 'D'
+        elif tmp == 3:
+            car.cur_dir = 'R'
 
     def work(self, car_path, road_path, cross_path):
         self.initFile(car_path, road_path, cross_path)
 
         self.current_time = 0
 
-        while self.current_time < self.max_time:
+        while self.current_time < self.max_time and self.finished_carnum < len(self.carList):
             self.current_time += 1  # 系统时间+1
             print("current time : " + str(self.current_time))
-            scheduled_carnum = 0  # 已调度车辆数置零
+            self.scheduled_carnum = 0  # 已调度车辆数置零
 
             for car in self.carList.values():
                 car.status = 0  # 车辆状态置为等待行驶
+                self.get_direction(car)  # 获取车辆方向
+                print("car" + str(car.id) + ": " + car.cur_dir + "\t" + str(car.path))
 
-            while scheduled_carnum < self.sum_carnum:
-                for road in self.roadList.values():
-                    '''
-                    / * 调整所有道路上在道路上的车辆，让道路上车辆前进，只要不出路口且可以到达终止状态的车辆
-                    * 分别标记出来等待的车辆（要出路口的车辆，或者因为要出路口的车辆阻挡而不能前进的车辆）
-                    * 和终止状态的车辆（在该车道内可以经过这一次调度可以行驶其最大可行驶距离的车辆） * /
-                    '''
-                    for channle_id in range(road.num_lane):
-                        self.driveAllCarJustOnRoadToEndState(road.road_id, channle_id)
+            for road in self.roadList.values():
+                '''
+                调整所有道路上在道路上的车辆，让道路上车辆前进，
+                只要不出路口且可以到达终止状态的车辆
+                '''
+                for channle_id in range(road.num_lane):
+                    self.driveAllCarJustOnRoadToEndState(road.road_id, channle_id)
 
-            while scheduled_carnum < self.sum_carnum:
+            for road in self.roadList.values():  # 预处理每条道路的x,y初始坐标
+                road.x = 0
+                road.y = 0
+                # 更新x,y坐标信息
+                car_id = road.status[road.x][road.y]
+                while car_id == 0 or self.carList[car_id].status == 1:
+                    # 无车或者已经被调度
+                    road.y += 1
+                    if road.y >= road.num_lane:
+                        road.x += 1
+                        road.y = 0
+                    if road.x >= road.road_len: break
+                    car_id = road.status[road.x][road.y]
+
+            sorted_crossList = sorted(self.crossList.values(), key=lambda d: d.id)
+
+            while self.scheduled_carnum < self.sum_carnum:
+                if self.last_scheduled_carnum != -1:
+                    if self.last_scheduled_carnum - self.scheduled_carnum == 0:
+                        print("deadlock!!!!")
+                self.last_scheduled_carnum = self.scheduled_carnum
+                print("current scheduled_carnum: " + str(self.scheduled_carnum))
+                print("current sum_carnum: " + str(self.sum_carnum))
                 # driveAllWaitCar()
-                for cross in self.crossList.values():
-                    for roads_id in cross.edgeList:
-                        print(roads_id)
-                        # Direction dir = getDirection();
-                        # Car car = getCarFromRoad(road, dir);
-                        # if conflict: break
-                        #
-                        # channle = car.getChannel()
-                        # car.moveToNextRoad()
-                        # driveAllCarJustOnRoadToEndState(channel)
+                for cross in sorted_crossList:
+                    for road_id in sorted(cross.edgeList1):  # 按id顺序遍历该路口的邻接边(以此路口为出口的)
+                        if road_id == -1: continue
+                        road = self.roadList[road_id]
+
+                        # 这里是调度的核心部分，即路口处的调度
+                        # 调度步骤如下：
+                        # 1. 从x,y开始，得到当前应该调度的一辆车
+                        # 2. 按情况分析，对此车进行调度：
+                        #   (1)L: 左转，需要考虑直行的车，即edgeList1[(i+3)%4]道路上优先级最高的车是否直行
+                        #   (2)D: 直行，直接判断是否能过路口
+                        #   (3)R: 右转，需要考虑直行和左转的车，即edgeList1[(i+1)%4]上直行的车，
+                        # 和edgeList1[(i+2)%4]左转的车
+                        # 3. 此车若能调度，则将该车道的车都调度一次,然后继续这条道路下一辆车；
+                        # 否则，循环到下一条道路
+
+                        while True:  # 循环执行，若能调度，尽可能多的调度
+                            # 1. 获取调度车辆
+                            if road.x >= road.road_len: break  # 表示这条道路已调度完成
+                            car_id = road.status[road.x][road.y]
+                            car = self.carList[car_id]
+
+                            # 终止条件： 车的cur_point即end_point，此时不用再考虑冲突
+                            if car.cur_point == car.end_point:
+                                self.scheduled_carnum += 1  # 调度车辆+1
+                                self.sum_carnum -= 1  # 调度总车辆-1
+                                self.schedule_carList.remove(car.id)
+                                self.finished_carnum += 1
+
+                                # 道路清理
+                                road = self.roadList[car.cur_edge]
+                                road.status[road.x, road.y] = 0  # 清理车辆
+                                road.car_num -= 1  # 该道路车辆-1
+
+                                # 更新x,y坐标信息
+                                car_id = road.status[road.x][road.y]
+                                while car_id == 0 or self.carList[car_id].status == 1:
+                                    # 无车或者已经被调度
+                                    road.y += 1
+                                    if road.y >= road.num_lane:
+                                        road.x += 1
+                                        road.y = 0
+                                    if road.x >= road.road_len: break
+                                    car_id = road.status[road.x][road.y]
+
+                                continue  # 继续这条车道！！
+
+                            idx = cross.edgeList1.index(road_id)  # 表示当前的road_id
+                            # 2. 判断是否有冲突
+                            conflict = False
+                            if car.cur_dir == 'L':
+                                # 考虑右边直行的车
+                                road_onright_id = cross.edgeList1[(idx + 3) % 4]
+                                if road_onright_id != -1:
+                                    road_onright = self.roadList[road_onright_id]
+                                    if road_onright.x < road_onright.road_len:
+                                        car2_id = road_onright.status[road_onright.x][road_onright.y]
+                                        car2 = self.carList[car2_id]
+                                        if car2.cur_dir == 'D':
+                                            conflict = True
+                            elif car.cur_dir == 'R':
+                                # 考虑左边直行的车
+                                road_onleft_id = cross.edgeList1[(idx + 1) % 4]
+                                if road_onleft_id != -1:
+                                    road_onleft = self.roadList[road_onleft_id]
+                                    if road_onleft.x < road_onleft.road_len:
+                                        car3_id = road_onleft.status[road_onleft.x][road_onleft.y]
+                                        car3 = self.carList[car3_id]
+                                        if car3.cur_dir == 'D':
+                                            conflict = True
+                                # 考虑对面左转的车
+                                road_towards_id = cross.edgeList1[(idx + 2) % 4]
+                                if road_towards_id != -1:
+                                    road_towards = self.roadList[road_towards_id]
+                                    if road_towards.x < road_towards.road_len:
+                                        car4_id = road_towards.status[road_towards.x][road_towards.y]
+                                        car4 = self.carList[car4_id]
+                                        if car4.cur_dir == 'D':
+                                            conflict = True
+
+                            # 3. 若可以调度，对当前车道进行调度
+                            if conflict: break  # 若冲突，此道路直接跳过！！
+                            if car.cur_dir == 'L':  # 左转
+                                cur_road_id = cross.edgeList2[(idx + 1) % 4]
+                            elif car.cur_dir == 'D':  # 直行
+                                cur_road_id = cross.edgeList2[(idx + 2) % 4]
+                            elif car.cur_dir == 'R':  # 右转
+                                cur_road_id = cross.edgeList2[(idx + 3) % 4]
+
+                            # 此时的调度类似于出库，不同的是行驶距离需要按照规则计算
+                            self.scheduled_carnum += 1  # 调度车辆+1
+
+                            cur_road = self.roadList[cur_road_id]
+                            num_lane = cur_road.num_lane
+                            road_len = cur_road.road_len
+                            status = cur_road.status
+                            for i in range(num_lane):  # 遍历车道
+                                if status[road_len - 1, i] == 0:
+                                    s = min(car.speed, cur_road.limit_rate)  # 可以行驶的距离
+
+                                    # 按规则减去之前那条路已经行驶的距离
+                                    if s > road.x:
+                                        s -= road.x
+                                    else:
+                                        s = 0
+
+                                    # s = 0时需要特殊处理
+                                    if s == 0:
+                                        last_road = self.roadList[car.cur_edge]
+                                        car.status = 1
+                                        last_road.status[last_road.x][last_road.y] = 0
+                                        last_road.status[0][last_road.y] = car.id
+                                        self.driveAllCarJustOnRoadToEndState(car.cur_edge, car.cur_lane)
+                                        break
+
+                                    for j in range(road_len - 1, road_len - s - 1, -1):  # 尝试着开更远
+                                        if status[j, i] != 0:  # 前方有车辆
+                                            j += 1
+                                            break
+
+                                    status[j, i] = car.id  # 调度车辆
+                                    cur_road.car_num += 1  # 该道路车辆＋1
+                                    car.path.append(cur_road.road_id)
+
+                                    # 更新车辆及道路信息
+                                    # 车辆本身：
+                                    #       car.status = 0  # 车的状态，0表示等待状态，1表示终止状态
+                                    #       car.cur_point = start_point  # 下一个路口（即将到达)的id号
+                                    #       car.cur_edge = -1  # 当前所在道路id
+                                    # 道路信息：
+                                    #       road.x、road.y（更新成下一个待调度车辆的坐标）
+                                    #       road.status（此车道清零，下一个车道添加）
+                                    #       road.car_num （次车道减1，下一个车道加1）
+
+                                    last_road = self.roadList[car.cur_edge]
+                                    last_road.status[last_road.x][last_road.y] = 0
+                                    last_road.car_num -= 1
+
+                                    # 信息全部更新之后才可以调度该条车道
+                                    self.driveAllCarJustOnRoadToEndState(car.cur_edge, car.cur_lane)
+
+                                    car.status = 1
+                                    car.cur_point = cur_road.v
+                                    car.cur_edge = cur_road.road_id
+                                    car.cur_lane = i
+
+                                    # 更新x,y坐标信息
+                                    car_id = last_road.status[last_road.x][last_road.y]
+                                    while car_id == 0 or self.carList[car_id].status == 1:
+                                        # 无车或者已经被调度
+                                        last_road.y += 1
+                                        if last_road.y >= last_road.num_lane:
+                                            last_road.x += 1
+                                            last_road.y = 0
+                                        if last_road.x >= last_road.road_len: break
+                                        car_id = last_road.status[last_road.x][last_road.y]
+                                    break  # 这里跳出，是已经找到可以行驶的车道了
+
+                            # ！！一定要处理路口堵死的情况
+                            break  # 这里跳出，是跳出当前的道路循环
 
             # 车库中的车辆上路行驶
             self.driveCarInGarage()
