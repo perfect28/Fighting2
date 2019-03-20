@@ -47,6 +47,7 @@ class Edge:
         self.is_bidirection = is_bidirection
         self.status = np.zeros((road_len, num_lane), dtype=int)
         self.car_num = 0  # 此时停在这条道路上的车的数量
+        self.min_speed = 0
         # x,y表示调度到哪辆车了
         self.x = 0  # 对应道路长度坐标
         self.y = 0  # 对应车道坐标
@@ -61,7 +62,7 @@ class Car:
         self.start_point = start_point
         self.end_point = end_point
         self.start_time = start_time
-        self.end_time = 100
+        self.end_time = 10000
         self.status = 0  # 车的状态，0表示等待状态，1表示终止状态
         self.path = []  # 车的导航路径，即最终结果
         self.cur_point = start_point  # 下一个路口（即将到达)的id号
@@ -178,6 +179,9 @@ class CarScheduler:
                 edge_weight = math.ceil(edge.road_len * 1.0 / edge.limit_rate)  # 边的权重为长度除以限速，粗略估计
                 status_weight = math.ceil(edge.car_num * 1.0 / edge.num_lane)  # 路况权重为车的数量除以车道数
                 tempdist = self.crossList[u].dis + edge_weight + 3 * status_weight
+
+                # edge_weight = math.ceil(edge.road_len * 1.0 / edge.min_speed)
+                # tempdist = self.crossList[u].dis + edge_weight
                 if tempdist < self.crossList[v].dis:
                     if endNode.id == v:  # 到达终点
                         return tempdist
@@ -195,6 +199,11 @@ class CarScheduler:
         # 2. 当前路况态度，延缓发车，避免死锁
         for car in self.sorted_carList:
             if car.start_time == self.current_time:
+
+                if len(self.schedule_carList) > 500:
+                    car.start_time += 1
+                    continue
+
                 # 获取该车即将开往的道路id
                 # 这里需要改变一下思路，不再是一开始就知道整个PATH然后按图索骥
                 # 而是每一个时间片都预估下一个road_id
@@ -216,6 +225,9 @@ class CarScheduler:
                     status_weight = math.ceil(edge.car_num * 1.0 / edge.num_lane)  # 路况权重为车的数量除以车道数
                     dis += edge_weight + 3 * status_weight
 
+                    # edge_weight = math.ceil(edge.road_len * 1.0 / edge.min_speed)
+                    # dis += edge_weight
+
                     if dis < min_len:
                         min_len = dis
                         road_id = edge_id
@@ -224,7 +236,7 @@ class CarScheduler:
                 num_lane = cur_road.num_lane
                 road_len = cur_road.road_len
 
-                if cur_road.car_num > num_lane * road_len / 7:
+                if cur_road.car_num > num_lane * road_len / 5:
                     car.start_time += 1
                     continue
 
@@ -348,10 +360,14 @@ class CarScheduler:
         self.initFile(car_path, road_path, cross_path)
 
         self.current_time = 0
+        start = time.clock()
 
         while self.current_time < self.max_time and self.finished_carnum < len(self.carList):
             self.current_time += 1  # 系统时间+1
-            # print("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!current time : " + str(self.current_time))
+            print("--------------current time---------------- : " + str(self.current_time))
+            print("-------------current finish--------------- : " + str(self.finished_carnum))
+            end = time.clock()
+            print('Running time: %s Seconds' % (end - start))
             # if self.current_time == 11:
             #     print("start debug")
 
@@ -399,8 +415,8 @@ class CarScheduler:
                 #         print("deadlock!!!!")
                 #         print(self.cur_schedule_carList)
                 # self.last_scheduled_carnum = self.scheduled_carnum
-                # print("current scheduled_carnum: " + str(self.scheduled_carnum))
-                # print("current sum_carnum: " + str(self.sum_carnum))
+                print("current scheduled_carnum: " + str(self.scheduled_carnum))
+                print("current sum_carnum: " + str(self.sum_carnum))
                 # driveAllWaitCar()
                 for cross in self.sorted_crossList:
                     for road_id in sorted(cross.edgeList1):  # 按id顺序遍历该路口的邻接边(以此路口为出口的)
@@ -608,14 +624,9 @@ def main():
     logging.info("cross_path is %s" % (cross_path))
     logging.info("answer_path is %s" % (answer_path))
 
-    start = time.clock()
-
     carScheduler = CarScheduler()
 
     carScheduler.work(car_path, road_path, cross_path)
-
-    end = time.clock()
-    print('Running time: %s Seconds' % (end - start))
 
     with open(answer_path, 'w') as f:
         for car in carScheduler.carList.values():
