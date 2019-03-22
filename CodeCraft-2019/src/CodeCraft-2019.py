@@ -156,7 +156,7 @@ class CarScheduler:
         self.sorted_crossList = sorted(self.crossList.values(), key=lambda d: d.id)
         self.sorted_carList = sorted(self.carList.values(), key=lambda d: d.speed, reverse=True)
 
-    def calculateshortestpath(self, startNode, endNode):
+    def calculateshortestpath(self, car_speed, startNode, endNode):
         if startNode.id == endNode.id:  # 直接返回！！
             return 0
         q = []
@@ -176,7 +176,7 @@ class CarScheduler:
                 u = edge.u  # ｕ应该和上边的tmp的id一致
                 v = edge.v
                 if self.crossList[v].vis: continue
-                edge_weight = math.ceil(edge.road_len * 1.0 / edge.limit_rate)  # 边的权重为长度除以限速，粗略估计
+                edge_weight = math.ceil(edge.road_len * 1.0 / min(car_speed, edge.limit_rate))  # 边的权重为长度除以限速，粗略估计
                 status_weight = math.ceil(edge.car_num * 1.0 / edge.num_lane)  # 路况权重为车的数量除以车道数
                 tempdist = self.crossList[u].dis + edge_weight + 3 * status_weight
 
@@ -200,7 +200,7 @@ class CarScheduler:
         for car in self.sorted_carList:
             if car.start_time == self.current_time:
 
-                if len(self.schedule_carList) > 500:
+                if len(self.schedule_carList) > 1000:
                     car.start_time += 1
                     continue
 
@@ -219,9 +219,9 @@ class CarScheduler:
 
                     startNode = self.crossList[edge.v]
                     endNode = self.crossList[car.end_point]
-                    dis = self.calculateshortestpath(startNode, endNode)
+                    dis = self.calculateshortestpath(car.speed, startNode, endNode)
 
-                    edge_weight = math.ceil(edge.road_len * 1.0 / edge.limit_rate)  # 边的权重为长度除以限速，粗略估计
+                    edge_weight = math.ceil(edge.road_len * 1.0 / min(car.speed, edge.limit_rate))  # 边的权重为长度除以限速，粗略估计
                     status_weight = math.ceil(edge.car_num * 1.0 / edge.num_lane)  # 路况权重为车的数量除以车道数
                     dis += edge_weight + 3 * status_weight
 
@@ -335,9 +335,9 @@ class CarScheduler:
 
             startNode = self.crossList[edge.v]
             endNode = self.crossList[car.end_point]
-            dis = self.calculateshortestpath(startNode, endNode)
+            dis = self.calculateshortestpath(car.speed, startNode, endNode)
 
-            edge_weight = math.ceil(edge.road_len * 1.0 / edge.limit_rate)  # 边的权重为长度除以限速，粗略估计
+            edge_weight = math.ceil(edge.road_len * 1.0 / min(car.speed, edge.limit_rate))  # 边的权重为长度除以限速，粗略估计
             status_weight = math.ceil(edge.car_num * 1.0 / edge.num_lane)  # 路况权重为车的数量除以车道数
             dis += edge_weight + 3 * status_weight
 
@@ -409,12 +409,38 @@ class CarScheduler:
 
             self.last_scheduled_carnum = -1
             while self.scheduled_carnum < self.sum_carnum:
-                # has_finined_car = False
-                # if self.last_scheduled_carnum != -1:
-                #     if not has_finined_car and self.last_scheduled_carnum - self.scheduled_carnum == 0:
-                #         print("deadlock!!!!")
-                #         print(self.cur_schedule_carList)
-                # self.last_scheduled_carnum = self.scheduled_carnum
+                has_finined_car = False
+                if self.last_scheduled_carnum != -1:
+                    if not has_finined_car and self.last_scheduled_carnum - self.scheduled_carnum == 0:
+                        print("deadlock!!!!")
+                        print(self.cur_schedule_carList)
+                        for i in self.cur_schedule_carList:
+                            tmp_car = self.carList[i]
+                            print(tmp_car.cur_dir + " " + str(tmp_car.cur_edge) + " " + str(tmp_car.cur_point))
+                            tmp_road = self.roadList[tmp_car.cur_edge]
+                            if tmp_road.status[tmp_road.x][tmp_road.y] == tmp_car.id:
+                                if tmp_car.cur_dir == 'R':
+                                    idx1 = self.crossList[tmp_car.cur_point].edgeList1.index(
+                                        tmp_car.cur_edge)
+                                    idx2 = (idx1 + 2) % 4
+                                    left_road_id = self.crossList[tmp_car.cur_point].edgeList2[idx2]
+                                    if left_road_id == -1:
+                                        continue
+                                    else:
+                                        tmp_car.cur_dir = 'D'
+                                        break
+                                elif tmp_car.cur_dir == 'L':
+                                    idx1 = self.crossList[tmp_car.cur_point].edgeList1.index(
+                                        tmp_car.cur_edge)
+                                    idx2 = (idx1 + 2) % 4
+                                    right_road_id = self.crossList[tmp_car.cur_point].edgeList2[idx2]
+                                    if right_road_id == -1:
+                                        continue
+                                    else:
+                                        tmp_car.cur_dir = 'D'
+                                        break
+
+                self.last_scheduled_carnum = self.scheduled_carnum
                 print("current scheduled_carnum: " + str(self.scheduled_carnum))
                 print("current sum_carnum: " + str(self.sum_carnum))
                 # driveAllWaitCar()
@@ -537,10 +563,19 @@ class CarScheduler:
                                         car.status = 1
                                         self.driveAllCarJustOnRoadToEndState(car.cur_edge, car.cur_lane, road.x)
                                     else:
+                                        wait_flag = False
                                         for j in range(road_len - 1, road_len - s - 1, -1):  # 尝试着开更远
                                             if cur_road.status[j, i] != 0:  # 前方有车辆
+                                                front_car = self.carList[cur_road.status[j, i]]
+                                                if front_car.status == 0:  # 前车还在等待，此车不能调度
+                                                    wait_flag = True
+                                                    is_traffic_jam = False
+                                                    break
                                                 j += 1
                                                 break
+
+                                        if wait_flag: break
+
                                         # 统计量
                                         self.scheduled_carnum += 1  # 调度车辆+1
                                         self.cur_schedule_carList.remove(car.id)
