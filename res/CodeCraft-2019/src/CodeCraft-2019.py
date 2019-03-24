@@ -9,7 +9,7 @@ import copy
 import numpy as np
 
 logging.basicConfig(level=logging.DEBUG,
-                    filename='../logs/CodeCraft-2019.log',
+                    filename='./logs/CodeCraft-2019.log',
                     format='[%(asctime)s] %(levelname)s [%(funcName)s: %(filename)s, %(lineno)d] %(message)s',
                     datefmt='%Y-%m-%d %H:%M:%S',
                     filemode='a')
