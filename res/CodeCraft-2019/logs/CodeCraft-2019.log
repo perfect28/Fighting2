@@ -2,3 +2,7 @@
 [2019-03-23 23:42:09] INFO [main: CodeCraft-2019.py, 750] road_path is config/road.txt
 [2019-03-23 23:42:09] INFO [main: CodeCraft-2019.py, 751] cross_path is config/cross.txt
 [2019-03-23 23:42:09] INFO [main: CodeCraft-2019.py, 752] answer_path is config/answer.txt
+[2019-03-24 14:12:46] INFO [main: CodeCraft-2019.py, 850] car_path is config/car.txt
+[2019-03-24 14:12:46] INFO [main: CodeCraft-2019.py, 851] road_path is config/road.txt
+[2019-03-24 14:12:46] INFO [main: CodeCraft-2019.py, 852] cross_path is config/cross.txt
+[2019-03-24 14:12:46] INFO [main: CodeCraft-2019.py, 853] answer_path is config/answer.txt

@@ -82,6 +82,7 @@ class CarScheduler:
 
         self.sorted_carList = []
         self.sorted_crossList = []
+        self.depatureList = [[] for i in range(1000000)]
 
         self.current_time = 0  # 当前时间片
         self.max_time = 10000  # 最大时间片设置为10000
@@ -161,6 +162,11 @@ class CarScheduler:
                 data = list(map(int, line.split(',')))
                 car_id, start_point, end_point, speed, start_time = data
                 self.carList[car_id] = Car(car_id, start_point, end_point, speed, start_time)
+                self.depatureList[start_time].append(car_id)
+                # if start_time in self.depatureList.keys():
+                #     self.depatureList[start_time].append(car_id)
+                # else:
+                #     self.depatureList[start_time] = [car_id]
 
         self.sorted_crossList = sorted(self.crossList.values(), key=lambda d: d.id)
         self.sorted_carList = sorted(self.carList.values(), key=lambda d: d.id)
@@ -207,80 +213,148 @@ class CarScheduler:
         # 这里需要慎重考虑一下，并不是到时间就发车，应该根据路况来定，以免发生死堵
         # 1. 对于同一时间同一地点，速度快的先发车 ！！此项违反交通规则！
         # 2. 当前路况态度，延缓发车，避免死锁
-        for car in self.sorted_carList:
-            if car.start_time == self.current_time:
-                car = self.carList[car.id]  # 重新获取该车的引用
-                if len(self.schedule_carList) > 1500:
-                    car.start_time += 1
-                    continue
 
-                # 获取该车即将开往的道路id
-                # 这里需要改变一下思路，不再是一开始就知道整个PATH然后按图索骥
-                # 而是每一个时间片都预估下一个road_id
+        # if self.current_time not in self.depatureList.keys():
+        #     return # 没有可以出发的车辆
 
-                # if car.id == 10013:
-                #     print("car10013 departure")
+        for car_id in self.depatureList[self.current_time]:
+            car = self.carList[car_id]  # 重新获取该车的引用
+            if len(self.schedule_carList) >= 2000:
+                car.start_time += 1
+                self.depatureList[self.current_time + 1].append(car.id)
+                continue
 
-                min_len = 0x3f3f3f3f
-                road_id = -1
-                # 遍历该出发点的每一个出口，粗略估计每条路的行驶代价
-                for edge_id in self.crossList[car.start_point].edgeList2:
-                    if edge_id == -1: continue
-                    edge = self.roadList[edge_id]
+            min_len = 0x3f3f3f3f
+            road_id = -1
+            # 遍历该出发点的每一个出口，粗略估计每条路的行驶代价
+            for edge_id in self.crossList[car.start_point].edgeList2:
+                if edge_id == -1: continue
+                edge = self.roadList[edge_id]
 
-                    startNode = self.crossList[edge.v]
-                    endNode = self.crossList[car.end_point]
-                    dis = self.calculateshortestpath(car.speed, startNode, endNode)
+                startNode = self.crossList[edge.v]
+                endNode = self.crossList[car.end_point]
+                dis = self.calculateshortestpath(car.speed, startNode, endNode)
 
-                    edge_weight = math.ceil(edge.road_len * 1.0 / min(car.speed, edge.limit_rate))  # 边的权重为长度除以限速，粗略估计
-                    status_weight = math.ceil(edge.car_num * 1.0 / edge.num_lane)  # 路况权重为车的数量除以车道数
-                    dis += edge_weight + 3 * status_weight
+                edge_weight = math.ceil(edge.road_len * 1.0 / min(car.speed, edge.limit_rate))  # 边的权重为长度除以限速，粗略估计
+                status_weight = math.ceil(edge.car_num * 1.0 / edge.num_lane)  # 路况权重为车的数量除以车道数
+                dis += edge_weight + 3 * status_weight
 
-                    # edge_weight = math.ceil(edge.road_len * 1.0 / edge.min_speed)
-                    # dis += edge_weight
+                # edge_weight = math.ceil(edge.road_len * 1.0 / edge.min_speed)
+                # dis += edge_weight
 
-                    if dis < min_len:
-                        min_len = dis
-                        road_id = edge_id
+                if dis < min_len:
+                    min_len = dis
+                    road_id = edge_id
 
-                if road_id == -1: continue
-                cur_road = self.roadList[road_id]
-                num_lane = cur_road.num_lane
-                road_len = cur_road.road_len
+            if road_id == -1: continue
+            cur_road = self.roadList[road_id]
+            num_lane = cur_road.num_lane
+            road_len = cur_road.road_len
 
-                if cur_road.car_num > num_lane * road_len / 5:
-                    car.start_time += 1
-                    continue
+            if cur_road.car_num > num_lane * road_len / 5:
+                car.start_time += 1
+                self.depatureList[self.current_time + 1].append(car.id)
+                continue
 
-                is_depature = False
-                status = cur_road.status
-                for i in range(num_lane):  # 遍历车道
-                    if status[road_len - 1, i] == 0:
-                        s = min(car.speed, cur_road.limit_rate)  # 可以行驶的距离
-                        for j in range(road_len - 1, road_len - s - 1, -1):  # 尝试着开更远
-                            if status[j, i] != 0:  # 前方有车辆
-                                j += 1
-                                break
+            is_depature = False
+            status = cur_road.status
+            for i in range(num_lane):  # 遍历车道
+                if status[road_len - 1, i] == 0:
+                    s = min(car.speed, cur_road.limit_rate)  # 可以行驶的距离
+                    for j in range(road_len - 1, road_len - s - 1, -1):  # 尝试着开更远
+                        if status[j, i] != 0:  # 前方有车辆
+                            j += 1
+                            break
 
-                        # 统计量
-                        self.sum_carnum += 1  # 调度总车辆+1
-                        self.schedule_carList.append(car.id)
-                        # 道路
-                        status[j, i] = car.id  # 调度车辆
-                        cur_road.car_num += 1  # 该道路车辆＋1
-                        # 车辆
-                        car.status = 1
-                        car.path.append(cur_road.road_id)
-                        car.cur_lane = i
-                        car.cur_pos = j
-                        car.cur_edge = cur_road.road_id
-                        car.cur_point = cur_road.v
-                        # print(str(car.id) + " depart!!")
-                        is_depature = True
-                        break
+                    # 统计量
+                    self.sum_carnum += 1  # 调度总车辆+1
+                    self.schedule_carList.append(car.id)
+                    # 道路
+                    status[j, i] = car.id  # 调度车辆
+                    cur_road.car_num += 1  # 该道路车辆＋1
+                    # 车辆
+                    car.status = 1
+                    car.path.append(cur_road.road_id)
+                    car.cur_lane = i
+                    car.cur_pos = j
+                    car.cur_edge = cur_road.road_id
+                    car.cur_point = cur_road.v
+                    # print(str(car.id) + " depart!!")
+                    is_depature = True
+                    break
 
-                if not is_depature:  # 表示此次没有出库，出发时间后移1
-                    car.start_time += 1
+            if not is_depature:  # 表示此次没有出库，出发时间后移1
+                car.start_time += 1
+                self.depatureList[self.current_time + 1].append(car.id)
+
+        # 这里不能遍历完整的车列表，代价太大
+        # for car in self.sorted_carList:
+        #     if car.start_time == self.current_time:
+        #         car = self.carList[car.id]  # 重新获取该车的引用
+        #         if len(self.schedule_carList) > 500:
+        #             car.start_time += 1
+        #             continue
+        #
+        #         min_len = 0x3f3f3f3f
+        #         road_id = -1
+        #         # 遍历该出发点的每一个出口，粗略估计每条路的行驶代价
+        #         for edge_id in self.crossList[car.start_point].edgeList2:
+        #             if edge_id == -1: continue
+        #             edge = self.roadList[edge_id]
+        #
+        #             startNode = self.crossList[edge.v]
+        #             endNode = self.crossList[car.end_point]
+        #             dis = self.calculateshortestpath(car.speed, startNode, endNode)
+        #
+        #             edge_weight = math.ceil(edge.road_len * 1.0 / min(car.speed, edge.limit_rate))  # 边的权重为长度除以限速，粗略估计
+        #             status_weight = math.ceil(edge.car_num * 1.0 / edge.num_lane)  # 路况权重为车的数量除以车道数
+        #             dis += edge_weight + 3 * status_weight
+        #
+        #             # edge_weight = math.ceil(edge.road_len * 1.0 / edge.min_speed)
+        #             # dis += edge_weight
+        #
+        #             if dis < min_len:
+        #                 min_len = dis
+        #                 road_id = edge_id
+        #
+        #         if road_id == -1: continue
+        #         cur_road = self.roadList[road_id]
+        #         num_lane = cur_road.num_lane
+        #         road_len = cur_road.road_len
+        #
+        #         if cur_road.car_num > num_lane * road_len / 5:
+        #             car.start_time += 1
+        #             continue
+        #
+        #         is_depature = False
+        #         status = cur_road.status
+        #         for i in range(num_lane):  # 遍历车道
+        #             if status[road_len - 1, i] == 0:
+        #                 s = min(car.speed, cur_road.limit_rate)  # 可以行驶的距离
+        #                 for j in range(road_len - 1, road_len - s - 1, -1):  # 尝试着开更远
+        #                     if status[j, i] != 0:  # 前方有车辆
+        #                         j += 1
+        #                         break
+        #
+        #                 # 统计量
+        #                 self.sum_carnum += 1  # 调度总车辆+1
+        #                 self.schedule_carList.append(car.id)
+        #                 # 道路
+        #                 status[j, i] = car.id  # 调度车辆
+        #                 cur_road.car_num += 1  # 该道路车辆＋1
+        #                 # 车辆
+        #                 car.status = 1
+        #                 car.path.append(cur_road.road_id)
+        #                 car.cur_lane = i
+        #                 car.cur_pos = j
+        #                 car.cur_edge = cur_road.road_id
+        #                 car.cur_point = cur_road.v
+        #                 # print(str(car.id) + " depart!!")
+        #                 is_depature = True
+        #                 break
+        #
+        #         if not is_depature:  # 表示此次没有出库，出发时间后移1
+        #             car.start_time += 1
 
     '''
     调度某一车道车辆到终止位置
@@ -394,7 +468,7 @@ class CarScheduler:
     #             if new_car.cur_dir == 'R':
 
     def dealwith_deadlock(self):
-        random.shuffle(self.cur_schedule_carList) # 打乱顺序
+        random.shuffle(self.cur_schedule_carList)  # 打乱顺序
         # 更新方向
         for i in self.cur_schedule_carList:
             tmp_car = self.carList[i]
@@ -435,7 +509,7 @@ class CarScheduler:
             self.carList[car.id] = back_car
             # print(str(back_car.id) + " " + str(back_car.start_time))
 
-        self.sorted_carList = sorted(self.carList.values(), key=lambda d:  d.id)
+        self.sorted_carList = sorted(self.carList.values(), key=lambda d: d.id)
 
         for road in self.back_roadList.values():
             back_road = copy.copy(road)
@@ -450,20 +524,18 @@ class CarScheduler:
         self.initFile(car_path, road_path, cross_path)
 
         self.current_time = 0
-        start = time.clock()
+
         deadlock_flag = False
+        sum_start = time.clock()
 
         while self.current_time < self.max_time and self.finished_carnum < len(self.carList):
+            start = time.clock()
             self.current_time += 1  # 系统时间+1
             print("--------------current time---------------- : " + str(self.current_time))
             print("-------------current finish--------------- : " + str(self.finished_carnum))
-            end = time.clock()
-            print('Running time: %s Seconds' % (end - start))
-            # if self.current_time == 73:
-            #     print("start debug")
 
+            tmp_start = time.clock()
             self.scheduled_carnum = 0  # 已调度车辆数置零
-
             self.cur_schedule_carList = []
             # for car in self.carList.values():
             for car_id in self.schedule_carList:  # 只管调度中的车辆
@@ -474,9 +546,15 @@ class CarScheduler:
                     if car_id in self.back_car_dir.keys():
                         car.cur_dir = self.back_car_dir[car_id]
                 else:
-                    self.get_direction(car)  # 获取车辆方向
+                    # 这里需要优化，每次求方向代价太大，且不必要
+                    # 只要能到路口的车求方向，其他车方向不变
+                    if car.cur_pos < min(car.speed, self.roadList[car.cur_edge].limit_rate):
+                        self.get_direction(car)  # 获取车辆方向
                 # print("car" + str(car.id) + ": " + car.cur_dir + "\t" + str(car.path))
 
+            tmp_end = time.clock()
+            print('Preprocess Car time: %s Seconds' % (tmp_end - tmp_start))
+            tmp_start = time.clock()
             for road in self.roadList.values():
                 '''
                 调整所有道路上在道路上的车辆，让道路上车辆前进，
@@ -502,6 +580,10 @@ class CarScheduler:
                     if road.x >= road.road_len: break
                     car_id = road.status[road.x][road.y]
 
+            tmp_end = time.clock()
+            print('Preprocess Road time: %s Seconds' % (tmp_end - tmp_start))
+
+            tmp_start = time.clock()
             self.last_scheduled_carnum = -1
             has_finined_car = False
             deadlock_flag = False  # 还原死锁标志
@@ -718,11 +800,22 @@ class CarScheduler:
 
                             break  # 这里跳出，是跳出当前的道路循环
 
+            tmp_end = time.clock()
+            print('Scheduling time: %s Seconds' % (tmp_end - tmp_start))
+
+            tmp_start = time.clock()
             if not deadlock_flag:  # 若未发生死锁，存储上一轮的所有状态信息
                 # 车库中的车辆上路行驶
                 self.driveCarInGarage()
 
-                for car in self.carList.values():
+                self.back_sum_carnum = self.sum_carnum
+                self.back_finished_carnum = self.finished_carnum
+                self.back_schedule_carList = self.schedule_carList[:]
+
+                # 无法对所有车进行备份，也没有必要，代价太大
+                # for car in self.carList.values():
+                for car_id in self.schedule_carList:
+                    car = self.carList[car_id]
                     back_car = copy.copy(car)
                     back_car.path = car.path[:]
                     self.back_carList[car.id] = back_car
@@ -733,10 +826,14 @@ class CarScheduler:
                     back_road.status = road.status.copy()
                     self.back_roadList[road.road_id] = back_road
 
-                self.back_sum_carnum = self.sum_carnum
-                self.back_finished_carnum = self.finished_carnum
-                self.back_schedule_carList = self.schedule_carList[:]
+            tmp_end = time.clock()
+            print('Backup time: %s Seconds' % (tmp_end - tmp_start))
 
+            end = time.clock()
+            print('Running time: %s Seconds' % (end - start))
+
+            sum_end = time.clock()
+            print('Sum time: %s Seconds' % (sum_end - sum_start))
 
 def main():
     start = time.clock()
