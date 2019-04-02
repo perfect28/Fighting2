@@ -134,3 +134,50 @@ def driveCarInGarage(self):
 
             if not is_depature:  # 表示此次没有出库，出发时间后移1
                 car.start_time += 1
+
+
+def driveAllCarJustOnRoadToEndState(self, road_id, channel_id, st):
+    road = self.roadList[road_id]
+    status = road.status
+    tmp_pos = -1  # 临时最前的车位置!!初始值为-1
+    flag = False  # flag为False，表示还未确定后面的车是否可以直接完成调度
+    for i in range(st + 1):
+        if status[i, channel_id] != 0:  # 当前位置有车
+            car = self.carList[status[i, channel_id]]
+            if car.status == 1:
+                flag = True
+                tmp_pos = i
+            else:
+                return
+
+    for i in range(st + 1, road.road_len):  # 从前往后枚举这条车道的车辆
+        if status[i, channel_id] != 0:  # 当前位置有车
+            car = self.carList[status[i, channel_id]]
+
+            if car.status == 0:  # 状态为等待行驶
+                s = min(car.speed, road.limit_rate)
+                if not flag and s > i:  # 可行驶距离超过到路口的距离!!(一定是路口，其他则是能走多少多少）
+                    # break  # 剩下的车都不改变状态！！
+                    continue
+
+                if s >= i - tmp_pos:  # 这里一定要加等于！！，否则之前的车就被覆盖了
+                    status[tmp_pos + 1, channel_id] = status[i, channel_id]  # 紧贴上一辆车后面！！
+                    car.cur_pos = tmp_pos + 1
+                    if tmp_pos + 1 != i:  # !！避免车没有动的情况
+                        status[i, channel_id] = 0
+                    tmp_pos = tmp_pos + 1
+                else:
+                    status[i - s, channel_id] = status[i, channel_id]
+                    car.cur_pos = i - s
+                    tmp_pos = i - s
+                    status[i, channel_id] = 0
+                # 统计量
+                self.scheduled_carnum += 1
+                self.cross_scheduled_carnum += 1
+                self.cur_schedule_carList.remove(car.id)
+                # 车辆
+                car.status = 1  # 车状态变为终止，其他不变
+            else:  # 状态为终止状态
+                tmp_pos = i  # !!一定要更新这里!!
+
+            flag = True  # 标记前方有标记为终态的车
