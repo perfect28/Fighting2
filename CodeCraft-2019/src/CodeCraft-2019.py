@@ -1,5 +1,8 @@
+# coding=utf-8
 import logging
 import sys
+import time
+from CarScheduler import CarScheduler
 
 logging.basicConfig(level=logging.DEBUG,
                     filename='../logs/CodeCraft-2019.log',
@@ -24,6 +27,21 @@ def main():
     logging.info("cross_path is %s" % (cross_path))
     logging.info("preset_answer_path is %s" % (preset_answer_path))
     logging.info("answer_path is %s" % (answer_path))
+
+    # 正常执行
+    start = time.clock()
+    carScheduler = CarScheduler()
+    carScheduler.work(car_path, road_path, cross_path, preset_answer_path)
+
+    with open(answer_path, 'w') as f:
+        for car in carScheduler.carList.values():
+            for id, path_id in enumerate(car.path):
+                if path_id > 100000:
+                    car.path[id] = path_id - 100000
+            f.write("(" + str(car.id) + ", " + str(car.start_time) + ", "
+                    + ", ".join([str(a) for a in car.path]) + ")\n")
+    end = time.clock()
+    print('Final time: %s Seconds' % (end - start))
 
 
 # to read input file
