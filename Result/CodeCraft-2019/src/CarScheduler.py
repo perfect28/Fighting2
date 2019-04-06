@@ -3,7 +3,7 @@ import functools
 import heapq
 import logging
 import math
-import random
+import sys
 import time
 import copy
 from queue import Queue
@@ -34,6 +34,8 @@ class CarScheduler:
         self.sum_carnum = 0  # 当前需要调度的车辆数
         self.schedule_carList = []  # sum_carnum对应的列表
         self.finished_carnum = 0  # 已经到达终点的车辆数
+        self.finished_pricar = 0  # 已经到达终点的优先车辆数
+        self.finished_preset = 0
 
         self.scheduled_carnum = 0  # 当前已调度的车辆数
         self.cur_schedule_carList = []  # 当前未调度的车辆列表，为了debug哪些车辆出了问题
@@ -105,16 +107,23 @@ class CarScheduler:
                 data = list(map(int, line.split(',')))
                 car_id, start_point, end_point, speed, start_time, is_priority, is_preset = data
                 self.carList[car_id] = Car(car_id, start_point, end_point, speed, start_time, is_priority, is_preset)
-                if is_priority:
-                    if start_point in self.priorityList.keys():
-                        self.priorityList[start_point].append(car_id)
-                    else:
-                        self.priorityList[start_point] = [car_id]
-                else:
-                    self.depatureList[start_time].append(car_id)
+
+                # if not is_preset and not is_priority and speed >= 8:
+                #     start_time += 400
+                # if not is_preset and is_priority and speed >= 8:
+                #     start_time += 200
+                # self.carList[car_id].start_time = start_time
+
             speedList = [0 for i in range(30)]  # key值为时间
+            preset_carnum = 0
+            priority_carnum = 0
             for car in self.carList.values():
                 speedList[car.speed] += 1
+                if car.is_preset == 1:
+                    preset_carnum += 1
+                if car.is_priority:
+                    priority_carnum += 1
+            print("preset carnum : %d, preset carnum : %d" % (preset_carnum, priority_carnum))
             for speed, num in enumerate(speedList):
                 if num > 0:
                     print("speed " + str(speed) + ": " + str(num))
@@ -134,6 +143,20 @@ class CarScheduler:
                 car.start_time = start_time
                 car.path = path
                 car.path_pos = 0
+
+        for car in self.carList.values():
+            if car.is_priority:
+                if car.start_point in self.priorityList.keys():
+                    self.priorityList[car.start_point].append(car.id)
+                else:
+                    self.priorityList[car.start_point] = [car.id]
+            else:
+                self.depatureList[car.start_time].append(car.id)
+
+        # for i in range(1, 1000):
+        #     if len(self.depatureList[i]) != 0:
+        #         print("%d : %d" % (i, len(self.depatureList[i])))
+
         self.sorted_crossList = sorted(self.crossList.values(), key=lambda d: d.id)
 
     def calculateshortestpath(self, cur_road, car_speed, startNode, endNode):
@@ -157,7 +180,8 @@ class CarScheduler:
                 v = edge.v
                 if self.crossList[v].vis: continue
                 edge_weight = math.ceil(edge.road_len * 1.0 / min(car_speed, edge.limit_rate))  # 边的权重为长度除以限速，粗略估计
-                status_weight = math.floor(edge.car_num * 1.0 / edge.num_lane / edge.road_len)  # 路况权重
+                status_weight = math.floor(edge.car_num * 1.0 / edge.num_lane)  # 路况权重
+                # status_weight = math.floor(edge.car_num * 1.0 / edge.num_lane / edge.road_len)  # 路况权重
                 # speed_weight = 0
                 # speed_weight = abs(car_speed - edge.mean_speed)
                 # speed_weight *= speed_weight
@@ -206,6 +230,23 @@ class CarScheduler:
             return True, j, i  # 成功发车, 返回目的地的坐标
         return False, -1, -1  # 道路堵死，无法发车
 
+    # 优先级车辆尝试发车
+    def runPriorityCar(self, cross_id):
+        if cross_id in self.priorityList.keys():  # 遍历所有当前时刻有优先车辆的交口
+            for car_id in self.priorityList[cross_id][:]:
+                car = self.carList[car_id]
+                if car.start_time > self.current_time: continue
+                if car.is_preset == 0 and self.sum_carnum >= self.max_schedule_carnum * 1.5:
+                    car.start_time += self.delay_time
+                    continue
+                road = self.roadList[car.next_edge]
+                s = min(car.speed, road.limit_rate)  # 可以行驶的距离
+                is_depature, j, i = self.RunToRoad(road, s)
+                if is_depature:
+                    self.priorityList[cross_id].remove(car_id)
+                    self.updateDepartCar(car, road, j, i)
+                    self.scheduled_carnum += 1  # 此时已经调度完毕
+
     # 车辆发车(每个时间片的最后发车)
     def driveCarInGarage(self):
         delay_time = self.delay_time
@@ -215,8 +256,8 @@ class CarScheduler:
                 for car_id in self.priorityList[cross_id][:]:
                     car = self.carList[car_id]
                     if car.start_time > self.current_time: continue
-                    if len(self.schedule_carList) >= self.max_schedule_carnum * 1.5:
-                        car.start_time += delay_time
+                    if car.is_preset == 0 and self.sum_carnum >= self.max_schedule_carnum * 1.5:
+                        car.start_time += self.delay_time
                         continue
                     road = self.roadList[car.next_edge]  # 优先级车辆都找过方向了
                     s = min(car.speed, road.limit_rate)  # 可以行驶的距离
@@ -229,18 +270,22 @@ class CarScheduler:
 
         for car_id in sorted(self.depatureList[self.current_time]):  # 按id号顺序发车!!
             car = self.carList[car_id]  # 重新获取该车的引用
-            if len(self.schedule_carList) >= self.max_schedule_carnum:
+            if car.is_preset == 0 and self.sum_carnum >= self.max_schedule_carnum:
                 car.start_time += delay_time
                 self.depatureList[self.current_time + delay_time].append(car.id)
                 continue
+            # if car.is_preset == 0 and car.speed > 4:
+            #     car.start_time += self.delay_time
+            #     continue
             startNode = self.crossList[car.start_point]
             endNode = self.crossList[car.end_point]
             road_id = self.get_next_road(car, startNode, endNode)
             road = self.roadList[road_id]
-            if road.car_num > road.num_lane * road.road_len * 4 / 5:
-                car.start_time += delay_time
-                self.depatureList[self.current_time + delay_time].append(car.id)
-                continue
+            # if car.speed > 2:
+            #     if car.is_preset == 0 and road.car_num > road.num_lane * road.road_len * 4 / 5:
+            #         car.start_time += delay_time
+            #         self.depatureList[self.current_time + delay_time].append(car.id)
+            #         continue
             s = min(car.speed, road.limit_rate)  # 可以行驶的距离
             is_depature, j, i = self.RunToRoad(road, s)
             if not is_depature:  # 表示此次没有出库，出发时间后移1
@@ -467,23 +512,6 @@ class CarScheduler:
                     self.get_direction(car)  # 获取车辆方向
             # print("car" + str(car.id) + ": " + car.cur_dir + "\t" + str(car.path))
 
-    # 优先级车辆尝试发车
-    def runPriorityCar(self, cross_id):
-        if cross_id in self.priorityList.keys():  # 遍历所有当前时刻有优先车辆的交口
-            for car_id in self.priorityList[cross_id][:]:
-                car = self.carList[car_id]
-                if car.start_time > self.current_time: continue
-                if self.sum_carnum >= self.max_schedule_carnum * 1.5:
-                    car.start_time += self.delay_time
-                    continue
-                road = self.roadList[car.next_edge]
-                s = min(car.speed, road.limit_rate)  # 可以行驶的距离
-                is_depature, j, i = self.RunToRoad(road, s)
-                if is_depature:
-                    self.priorityList[cross_id].remove(car_id)
-                    self.updateDepartCar(car, road, j, i)
-                    self.scheduled_carnum += 1  # 此时已经调度完毕
-
     def createCarSequence(self):
         for road in self.roadList.values():
             if road.car_num == 0: continue
@@ -558,9 +586,11 @@ class CarScheduler:
         while self.current_time < self.max_time and self.finished_carnum < len(self.carList):
             start = time.clock()
             self.current_time += 1  # 系统时间+1
-            print("--------------current time---------------- : " + str(self.current_time))
-            print("-------------current finish--------------- : " + str(self.finished_carnum))
-            print("-------------current schedule--------------- : " + str(self.sum_carnum))
+            sum_end = time.clock()
+            print(
+                "\rCurTime : %d CurSchedule : %d CurFinish : %d Pricar : %d Preset : %d Sum time: %6s s" % (
+                    self.current_time, self.sum_carnum, self.finished_carnum, self.finished_pricar,
+                    self.finished_preset, sum_end - sum_start), end='')
 
             # if self.current_time == 2:
             #     print("debug")
@@ -568,7 +598,7 @@ class CarScheduler:
             tmp_start = time.clock()
             self.initCarDir()
             tmp_end = time.clock()
-            print('Preprocess Car time: %s Seconds' % (tmp_end - tmp_start))
+            # print('Preprocess Car time: %s Seconds' % (tmp_end - tmp_start))
 
             # 第一步，道路内车辆的标定与驱动
             tmp_start = time.clock()
@@ -576,7 +606,7 @@ class CarScheduler:
                 for channle_id in range(road.num_lane):
                     self.driveAllCarJustOnRoadToEndState(road.road_id, channle_id, -1)
             tmp_end = time.clock()
-            print('Preprocess Road time: %s Seconds' % (tmp_end - tmp_start))
+            # print('Preprocess Road time: %s Seconds' % (tmp_end - tmp_start))
 
             # 第二步，优先车辆上路，按路口遍历
             for cross_id in self.crossList:
@@ -593,18 +623,18 @@ class CarScheduler:
             while self.scheduled_carnum < self.sum_carnum:
                 if self.last_scheduled_carnum != -1:
                     if not self.has_finined_car and self.last_scheduled_carnum == self.scheduled_carnum:
-                        print("deadlock!!!!")
                         # while True:
                         #     print("deadlock!!!!")
                         #     time.sleep(10)
-                        self.deadlock_time += 1
+                        print("deadlock!!!!")
+                        # self.deadlock_time += 1
                         self.deadlock_flag = True
-                        self.dealwith_deadlock()
+                        # self.dealwith_deadlock()
                         break
                 self.has_finined_car = False
                 self.last_scheduled_carnum = self.scheduled_carnum
-                print("current scheduled_carnum: " + str(self.scheduled_carnum))
-                print("current sum_carnum: " + str(self.sum_carnum))
+                # print("current scheduled_carnum: " + str(self.scheduled_carnum))
+                # print("current sum_carnum: " + str(self.sum_carnum))
                 for cross in self.sorted_crossList:
                     for road_id in sorted(cross.edgeList1,
                                           key=functools.cmp_to_key(cmp)):  # 按id顺序遍历
@@ -636,20 +666,21 @@ class CarScheduler:
                             else:
                                 break
             tmp_end = time.clock()
-            print('Scheduling time: %s Seconds' % (tmp_end - tmp_start))
+            # print('Scheduling time: %s Seconds' % (tmp_end - tmp_start))
             # 第五步，发车
             if not self.deadlock_flag:  # 若未发生死锁，存储上一轮的所有状态信息
                 # 车库中的车辆上路行驶
                 tmp_start = time.clock()
                 self.driveCarInGarage()
                 tmp_end = time.clock()
-                print('Depart time: %s Seconds' % (tmp_end - tmp_start))
+                # print('Depart time: %s Seconds' % (tmp_end - tmp_start))
                 # 保存当前状态
-                self.save()
+                # self.save()
+            else:
+                break
+                # continue
             end = time.clock()
-            print('Running time: %s Seconds' % (end - start))
-            sum_end = time.clock()
-            print('Sum time: %s Seconds' % (sum_end - sum_start))
+            # print('Running time: %s Seconds' % (end - start))
 
     def save(self):
         self.back_sum_carnum = self.sum_carnum
@@ -668,7 +699,7 @@ class CarScheduler:
             self.back_carList[car.id] = back_car
             # print(str(back_car.id) + " " + str(back_car.start_time))
         tmp_end = time.clock()
-        print('Backup Car time: %s Seconds' % (tmp_end - tmp_start))
+        # print('Backup Car time: %s Seconds' % (tmp_end - tmp_start))
 
         tmp_start = time.clock()
         for road in self.roadList.values():
@@ -676,7 +707,7 @@ class CarScheduler:
             back_road.status = road.status.copy()
             self.back_roadList[road.road_id] = back_road
         tmp_end = time.clock()
-        print('Backup Road time: %s Seconds' % (tmp_end - tmp_start))
+        # print('Backup Road time: %s Seconds' % (tmp_end - tmp_start))
 
     def conflict(self, car, cross):
         idx = cross.edgeList1.index(car.cur_edge)  # 表示当前的road_id
@@ -753,6 +784,10 @@ class CarScheduler:
         self.cur_schedule_carList.remove(car.id)
         self.finished_carnum += 1
         self.finished_speedList[car.speed] += 1
+        if car.is_priority:
+            self.finished_pricar += 1
+        if car.is_preset:
+            self.finished_preset += 1
         # 道路
         road = self.roadList[car.cur_edge]
         road.status[car.cur_pos][car.cur_lane] = 0  # 清理车辆

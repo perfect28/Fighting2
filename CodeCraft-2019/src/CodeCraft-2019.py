@@ -30,6 +30,7 @@ def main():
 
     '''
     ../2-map-training-1/car.txt ../2-map-training-1/road.txt ../2-map-training-1/cross.txt  ../2-map-training-1/presetAnswer.txt ../2-map-training-1/answer.txt
+    ../2-map-training-2/car.txt ../2-map-training-2/road.txt ../2-map-training-2/cross.txt  ../2-map-training-2/presetAnswer.txt ../2-map-training-2/answer.txt
     
         ../config-2/car.txt ../config-2/road.txt ../config-2/cross.txt  ../config-2/presetAnswer.txt ../config-2/answer.txt
         ../config-3/car.txt ../config-3/road.txt ../config-3/cross.txt  ../config-3/presetAnswer.txt ../config-3/answer.txt
@@ -48,8 +49,8 @@ def main():
     # 正常执行
     start = time.clock()
     carScheduler = CarScheduler()
-    carScheduler.weight = 20
-    carScheduler.max_schedule_carnum = 2000  # 最大同时调度车辆数，可调参数
+    carScheduler.weight = 100
+    carScheduler.max_schedule_carnum = 3000  # 最大同时调度车辆数，可调参数
     carScheduler.work(car_path, road_path, cross_path, preset_answer_path)
 
     with open(answer_path, 'w') as f:

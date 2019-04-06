@@ -32,13 +32,24 @@ def main():
     ../2-map-training-1/car.txt ../2-map-training-1/road.txt ../2-map-training-1/cross.txt  ../2-map-training-1/presetAnswer.txt ../2-map-training-1/answer.txt
     
         ../config-2/car.txt ../config-2/road.txt ../config-2/cross.txt  ../config-2/presetAnswer.txt ../config-2/answer.txt
+        ../config-3/car.txt ../config-3/road.txt ../config-3/cross.txt  ../config-3/presetAnswer.txt ../config-3/answer.txt
     '''
 
+    # # 测试最优参数
+    # for weight in range(20, 41, 10):
+    #     for carnum in range(1000, 4001, 1000):
+    #         carScheduler = CarScheduler()
+    #         carScheduler.weight = weight  # 车况权值，可调参数
+    #         carScheduler.max_schedule_carnum = carnum  # 最大同时调度车辆数，可调参数
+    #         carScheduler.work(car_path, road_path, cross_path, preset_answer_path)
+    #         print("weight: %d, carnum: %d" % (weight, carnum))
+    #         print("#" * 100)
+    # return
     # 正常执行
     start = time.clock()
     carScheduler = CarScheduler()
-    carScheduler.weight = 20
-    carScheduler.max_schedule_carnum = 1500  # 最大同时调度车辆数，可调参数
+    carScheduler.weight = 100
+    carScheduler.max_schedule_carnum = 3000  # 最大同时调度车辆数，可调参数
     carScheduler.work(car_path, road_path, cross_path, preset_answer_path)
 
     with open(answer_path, 'w') as f:
@@ -50,7 +61,7 @@ def main():
                 f.write("(" + str(car.id) + ", " + str(car.start_time) + ", "
                         + ", ".join([str(a) for a in car.path]) + ")\n")
     end = time.clock()
-    print('Final time: %s Seconds' % (end - start))
+    print('\nFinal time: %s Seconds' % (end - start))
 
     scheduleTime = 0
     allScheduleTime = 0
@@ -65,6 +76,8 @@ def main():
     allScheduleTime = 0
     for car in carScheduler.carList.values():
         allScheduleTime += car.end_time - car.start_time
+        # if car.start_time > car.end_time:
+        #     print(str(car.id) + " " + str(car.start_time) + " " + str(car.end_time))
     print("originResult is Result {scheduleTime = %d, allScheduleTime = %d}"
           % (scheduleTime, allScheduleTime))
 
