@@ -640,7 +640,6 @@ class CarScheduler:
 
     def work(self, car_path, road_path, cross_path):
         self.initFile(car_path, road_path, cross_path)
-
         self.current_time = 0
 
         deadlock_flag = False

@@ -40,6 +40,7 @@ class Edge:
         # x,y表示调度到哪辆车了
         self.x = 0  # 对应道路长度坐标
         self.y = 0  # 对应车道坐标
+        self.scheduleList = []
         # print("road(u,v,len,channel): " + str(road_id) + ' ' + str(u) + ' ' + str(v) + ' ' + str(road_len) + ' ' + str(num_lane))
 
 
@@ -56,7 +57,7 @@ class Car:
         self.end_time = 10000
         self.status = 0  # 车的状态，0表示等待状态，1表示终止状态
         self.path = []  # 车的导航路径，即最终结果
-        self.path_pos = []  # 导航路径的位置，供预置车辆使用
+        self.path_pos = -1  # 导航路径的位置，供预置车辆使用
         self.cur_point = start_point  # 下一个路口（即将到达)的id号
         self.last_edge = -1  # 上一轮所在道路id
         self.cur_edge = -1  # 当前所在道路id
